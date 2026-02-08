@@ -18,7 +18,7 @@
 | 配置项 | 内容 |
 | :--- | :--- |
 | **LLM 提供商** | `Custom Provider` |
-| **API 地址** | `http://127.0.0.1:6300/v1` |
+| **API 地址** | `http://127.0.0.1:6300/` |
 | **API 密钥** | `你的 Google Gemini API Key` |
 | **模型名称** | `gemini-3-flash-preview` (或其它 Gemini 模型) |
 
