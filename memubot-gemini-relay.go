@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -23,7 +25,69 @@ var (
 	// 签名缓存：tool_call_id -> thought_signature
 	signatureCache   = make(map[string]string)
 	signatureCacheMu sync.RWMutex
+
+	// 上下文缓存：hash -> cache entry
+	contextCache   = make(map[string]CacheEntry)
+	contextCacheMu sync.RWMutex
 )
+
+// --- 缓存管理 ---
+type CacheEntry struct {
+	Name     string // cachedContents/{id}
+	ExpireAt time.Time
+}
+
+// 计算缓存键 (基于 System + Tools)
+func computeCacheKey(system string, tools []geminiTool) string {
+	h := sha256.New()
+	h.Write([]byte(system))
+	toolsJSON, _ := json.Marshal(tools)
+	h.Write(toolsJSON)
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// --- 缓存创建 API ---
+type CreateCacheRequest struct {
+	Model             string         `json:"model"`
+	SystemInstruction *GoogleContent `json:"systemInstruction,omitempty"`
+	Tools             []geminiTool   `json:"tools,omitempty"`
+	TTL               string         `json:"ttl"`
+}
+
+type CreateCacheResponse struct {
+	Name       string `json:"name"`       // cachedContents/{id}
+	ExpireTime string `json:"expireTime"` // RFC 3339
+}
+
+func createCache(client *http.Client, apiKey, model string,
+	systemInstruction *GoogleContent, tools []geminiTool) (string, error) {
+	req := CreateCacheRequest{
+		Model:             "models/" + model,
+		SystemInstruction: systemInstruction,
+		Tools:             tools,
+		TTL:               "1800s", // 30 分钟
+	}
+	payload, _ := json.Marshal(req)
+
+	url := fmt.Sprintf(
+		"https://generativelanguage.googleapis.com/v1beta/cachedContents?key=%s",
+		apiKey)
+
+	resp, err := client.Post(url, "application/json", bytes.NewBuffer(payload))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("create cache failed: %s", string(body))
+	}
+
+	var result CreateCacheResponse
+	json.NewDecoder(resp.Body).Decode(&result)
+	return result.Name, nil
+}
 
 // --- 结构体定义 (通用/OpenAI/Anthropic 输入) ---
 
@@ -117,6 +181,7 @@ type GoogleRequest struct {
 	Contents          []GoogleContent `json:"contents"`
 	Tools             []geminiTool    `json:"tools,omitempty"`
 	SystemInstruction *GoogleContent  `json:"systemInstruction,omitempty"`
+	CachedContent     string          `json:"cachedContent,omitempty"`
 }
 
 type GoogleResponse struct {
@@ -518,7 +583,7 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// === 2. 发送请求 ===
+	// === 1.5 缓存处理 ===
 	transport := &http.Transport{}
 	if proxyURL != "" {
 		pURL, _ := url.Parse(proxyURL)
@@ -528,6 +593,51 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 		Transport: transport,
 		Timeout:   120 * time.Second,
 	}
+
+	var cacheName string
+	if gReq.SystemInstruction != nil || len(gReq.Tools) > 0 {
+		cacheKey := computeCacheKey(genReq.System, gReq.Tools)
+
+		contextCacheMu.RLock()
+		entry, exists := contextCache[cacheKey]
+		contextCacheMu.RUnlock()
+
+		if exists && time.Now().Before(entry.ExpireAt) {
+			// 使用已有缓存
+			cacheName = entry.Name
+			if debugMode {
+				fmt.Printf("[CACHE] 命中缓存: %s\n", cacheName)
+			}
+		} else {
+			// 创建新缓存
+			name, err := createCache(client, reqKey, genReq.Model,
+				gReq.SystemInstruction, gReq.Tools)
+			if err != nil {
+				fmt.Printf("[CACHE] 创建失败: %v (回退到完整请求)\n", err)
+			} else {
+				cacheName = name
+				contextCacheMu.Lock()
+				contextCache[cacheKey] = CacheEntry{
+					Name:     name,
+					ExpireAt: time.Now().Add(25 * time.Minute), // 留 5 分钟余量
+				}
+				contextCacheMu.Unlock()
+				if debugMode {
+					fmt.Printf("[CACHE] 创建成功: %s\n", cacheName)
+				}
+			}
+		}
+	}
+
+	// 如果有缓存，清空请求中的 System 和 Tools（由缓存提供）
+	if cacheName != "" {
+		gReq.CachedContent = cacheName
+		gReq.SystemInstruction = nil
+		gReq.Tools = nil
+	}
+
+	// === 2. 发送请求 ===
+	// client 已在缓存处理阶段创建
 
 	googleURL := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", genReq.Model, reqKey)
 	payload, _ := json.Marshal(gReq)

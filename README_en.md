@@ -8,6 +8,7 @@ This is a high-efficiency, lightweight Go language relay server designed to enab
 - **Protocol Conversion**: Maps message streams in various API formats completely to the Gemini `generateContent` interface.
 - **🔧 Function Call Support**: Fully supports Anthropic/MiniMax style tool calls (`tool_use`/`tool_result`).
 - **🧠 Thinking Mode**: Supports Gemini 2.0's thinking mode, automatically handling `thought_signature`.
+- **📦 Context Caching**: Automatically caches System Prompt and Tools definitions, **effectively avoiding TPM limits**, significantly reducing token consumption per request.
 - **Built-in Proxy**: Supports the `--proxy` parameter, facilitating access to Google services through a local proxy in network environments like mainland China.
 - **Minimalist Operation**: No complex environment variable configuration required, ready to use upon startup.
 
@@ -105,6 +106,33 @@ Supports Anthropic/MiniMax style tool definitions:
 1. **New Conversation Start Test**: It is recommended to clear the conversation history and restart to ensure `thought_signature` is passed correctly.
 2. **Thinking Mode**: Gemini 2.0 function calling requires `thought_signature`, which this relay automatically caches and restores.
 3. **Debug Mode**: Use `--debug` to view complete request/response data.
+
+## 📦 Context Caching (Avoid TPM Limits)
+
+This relay implements [Gemini Explicit Context Caching](https://ai.google.dev/gemini-api/docs/caching), automatically caching System Prompt and Tools definitions.
+
+> ⚠️ **Why is this feature needed?**  
+> Each memU bot request includes ~30KB System Prompt + ~15KB Tools definitions. In long conversations, this easily hits Gemini API's **TPM (Tokens Per Minute) limits**.  
+> With caching, subsequent requests only send new messages, **reducing token consumption by 70%+**, effectively avoiding rate limits.
+
+### How It Works
+
+1. **First Request**: Creates a cache containing System Prompt + Tools, stores the cache ID
+2. **Subsequent Requests**: Reuses the cache, only sends new messages
+3. **Cache Expiry**: TTL is 30 minutes, automatically recreated upon expiry
+
+### Debug Logs
+
+| Log Message | Meaning |
+|-------------|----------|
+| `[CACHE] 创建成功: cachedContents/xxx` | Cache created successfully |
+| `[CACHE] 命中缓存: cachedContents/xxx` | Cache hit, reusing existing cache |
+| `[CACHE] 创建失败: ... (回退到完整请求)` | Cache creation failed, falling back to full request |
+
+### Notes
+
+- Cache creation requires minimum ~4096 tokens; smaller prompts will fallback to full requests
+- If System Prompt or Tools change, a new cache is automatically created
 
 
 ## 🖥️ Running Effect

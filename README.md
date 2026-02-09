@@ -8,6 +8,7 @@
 - **协议转换**: 将各种 API 格式的消息流完整映射至 Gemini `generateContent` 接口。
 - **🔧 Function Call 支持**: 完整支持 Anthropic/MiniMax 风格的工具调用（`tool_use`/`tool_result`）。
 - **🧠 Thinking Mode**: 支持 Gemini 2.0 的思考模式，自动处理 `thought_signature`。
+- **📦 上下文缓存**: 自动缓存 System Prompt 和 Tools 定义，**有效避免 TPM 触顶**，大幅减少每次请求的 token 消耗。
 - **内置代理**: 支持 `--proxy` 参数，方便在中国大陆等网络环境下通过本地代理访问 Google 服务。
 - **极简运行**: 无需配置复杂的环境变量，启动即用。
 
@@ -105,6 +106,33 @@ GOOS=windows GOARCH=amd64 go build -o memubot-gemini-relay-windows.exe memubot-g
 1. **新对话开始测试**：建议清空对话历史后重新开始，确保 `thought_signature` 正确传递
 2. **Thinking Mode**：Gemini 2.0 的函数调用需要 `thought_signature`，本 relay 会自动缓存和恢复
 3. **调试模式**：使用 `--debug` 查看完整的请求/响应数据
+
+## 📦 上下文缓存（避免 TPM 触顶）
+
+本中继实现了 [Gemini Explicit Context Caching](https://ai.google.dev/gemini-api/docs/caching)，自动缓存 System Prompt 和 Tools 定义。
+
+> ⚠️ **为什么需要这个功能？**  
+> memU bot 每次请求都包含 ~30KB System Prompt + ~15KB Tools 定义，在长对话中很容易触及 Gemini API 的 **TPM（Tokens Per Minute）限制**。  
+> 通过缓存，后续请求仅发送新消息，**token 消耗减少 70%+**，有效避免触顶。
+
+### 工作原理
+
+1. **首次请求**：创建包含 System Prompt + Tools 的缓存，保存缓存 ID
+2. **后续请求**：复用缓存，仅发送新消息
+3. **缓存过期**：TTL 为 30 分钟，过期后自动重建
+
+### 调试日志
+
+| 日志信息 | 含义 |
+|---------|------|
+| `[CACHE] 创建成功: cachedContents/xxx` | 缓存创建成功 |
+| `[CACHE] 命中缓存: cachedContents/xxx` | 缓存命中，复用已有缓存 |
+| `[CACHE] 创建失败: ... (回退到完整请求)` | 缓存创建失败，回退到完整请求 |
+
+### 注意事项
+
+- 缓存创建需要最小约 4096 tokens，小 prompt 会自动回退到完整请求
+- 如果 System Prompt 或 Tools 发生变化，会自动创建新缓存
 
 
 ## 🖥️ 运行效果
