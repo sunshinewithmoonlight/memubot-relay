@@ -172,9 +172,14 @@ Use the `--tpm` parameter to specify the rate limit, supporting `K/M` suffixes o
 ```
 
 ### Mechanism
+
 1. **Estimated Deduction**: Before sending a request, tokens are roughly estimated and deducted based on the JSON Body size (bytes/3).
 2. **Smooth Waiting**: If tokens are insufficient, the program calculates the wait time and automatically blocks (Sleeps) before sending the request.
-3. **Accurate Correction**: After receiving the Gemini response, correction (refund or extra deduction) is performed based on `usageMetadata.totalTokenCount`.
+3. **Safe Correction**: Only deducts extra tokens if estimated too low; over-estimations are not refunded, serving as a safety buffer.
+4. **429 Smart Throttling**:
+   - On standard 429 error: Additional tokens are deducted, and a 61-second cooldown is enforced.
+   - On `"Resource has been exhausted"` error: Triggers a 30-minute throttling mode, forcing a 61-second interval between requests.
+5. **Output Control**: When TPM is enabled, a 1-second forced wait precedes each request, and `maxOutputTokens` is capped at 4000.
 
 > [!TIP]
 > It is recommended to set this to 90% of the model's TPM limit (e.g., set `0.9M` for a 1M limit) to provide a safety buffer.

@@ -38,6 +38,11 @@ var (
 	// 上下文缓存：hash -> cache entry
 	contextCache   = make(map[string]CacheEntry)
 	contextCacheMu sync.RWMutex
+
+	// 429 节流：收到 Resource Exhausted 后限制请求频率
+	throttleMu      sync.Mutex
+	throttleUntil   time.Time // 节流生效截止时间（30分钟后自动取消）
+	throttleLastReq time.Time // 节流期间上次请求的时间
 )
 
 // --- 缓存管理 ---
@@ -379,10 +384,15 @@ type geminiTool struct {
 }
 
 type GoogleRequest struct {
-	Contents          []GoogleContent `json:"contents"`
-	Tools             []geminiTool    `json:"tools,omitempty"`
-	SystemInstruction *GoogleContent  `json:"systemInstruction,omitempty"`
-	CachedContent     string          `json:"cachedContent,omitempty"`
+	Contents          []GoogleContent   `json:"contents"`
+	Tools             []geminiTool      `json:"tools,omitempty"`
+	SystemInstruction *GoogleContent    `json:"systemInstruction,omitempty"`
+	CachedContent     string            `json:"cachedContent,omitempty"`
+	GenerationConfig  *GenerationConfig `json:"generationConfig,omitempty"`
+}
+
+type GenerationConfig struct {
+	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
 }
 
 type GoogleResponse struct {
@@ -992,6 +1002,7 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 				if debugMode {
 					fmt.Printf("[TPM] ✅ 允许请求，预估 %.0f tokens\n", estimatedTokens)
 				}
+				time.Sleep(1 * time.Second)
 				break
 			}
 			if waitTime < 0 {
@@ -1000,8 +1011,9 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			fmt.Printf("[TPM] ⏳ 令牌不足，等待 %.1f 秒...\n", waitTime)
-			time.Sleep(time.Duration(waitTime*1000) * time.Millisecond)
+			time.Sleep(time.Duration((waitTime+1)*1000) * time.Millisecond)
 		}
+		gReq.GenerationConfig = &GenerationConfig{MaxOutputTokens: 4000}
 	}
 
 	// === 2. 发送请求 ===
@@ -1014,6 +1026,21 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("[DEBUG] %s 发送给 Gemini API 的数据 (Payload): %s\n", time.Now().Format("15:04:05"), genReq.Model)
 		fmt.Printf("%s\n", string(payload))
 	}
+
+	// === 2.1 429 节流检查 ===
+	throttleMu.Lock()
+	if time.Now().Before(throttleUntil) {
+		elapsed := time.Since(throttleLastReq)
+		if elapsed < 61*time.Second {
+			wait := 61*time.Second - elapsed
+			throttleMu.Unlock()
+			fmt.Printf("[429 Resource Exhausted] ⏳ 节流中，等待 %.0f 秒...\n", wait.Seconds())
+			time.Sleep(wait)
+			throttleMu.Lock()
+		}
+		throttleLastReq = time.Now()
+	}
+	throttleMu.Unlock()
 
 	gReqObj, _ := http.NewRequest("POST", googleURL, bytes.NewBuffer(payload))
 	gReqObj.Header.Set("Content-Type", "application/json")
@@ -1034,6 +1061,21 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 
 	if resp.StatusCode != 200 {
 		fmt.Printf("[ERR] Google 报错 (状态码 %d): %s\n", resp.StatusCode, string(gBody))
+		if resp.StatusCode == 429 {
+			if strings.Contains(string(gBody), "Resource has been exhausted") {
+				// 激活节流：30分钟内每分钟最多一次请求
+				throttleMu.Lock()
+				throttleUntil = time.Now().Add(30 * time.Minute)
+				throttleLastReq = time.Now()
+				throttleMu.Unlock()
+				fmt.Println("[429] 🚫 Resource Exhausted，已启动节流（每分钟最多1次请求，30分钟后自动取消）")
+			}
+			if tpmLimiter != nil {
+				// tpmLimiter.ConsumeExtra(estimatedTokens)
+				// 此处普通429 error的等待61秒尚未经过测试
+				time.Sleep(61 * time.Second)
+			}
+		}
 		w.WriteHeader(resp.StatusCode)
 		w.Write(gBody)
 		return
@@ -1047,24 +1089,20 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// === TPM 事后修正 ===
+	// === TPM 事后修正（仅在预估偏低时追加扣减，预估偏高不退还）===
 	if tpmLimiter != nil && gResp.UsageMetadata.TotalTokenCount > 0 {
 		actualTokens := float64(gResp.UsageMetadata.TotalTokenCount)
-		diff := estimatedTokens - actualTokens
-		if diff > 0 {
-			// 预估偏高，退还多扣的
-			tpmLimiter.Refund(diff)
-			if debugMode {
-				fmt.Printf("[TPM] 修正: 预估 %.0f, 实际 %.0f, 退还 %.0f\n",
-					estimatedTokens, actualTokens, diff)
-			}
-		} else if diff < 0 {
+		if actualTokens > estimatedTokens {
 			// 预估偏低，追加扣减
-			tpmLimiter.ConsumeExtra(-diff)
+			extra := actualTokens - estimatedTokens
+			tpmLimiter.ConsumeExtra(extra)
 			if debugMode {
 				fmt.Printf("[TPM] 修正: 预估 %.0f, 实际 %.0f, 追加扣 %.0f\n",
-					estimatedTokens, actualTokens, -diff)
+					estimatedTokens, actualTokens, extra)
 			}
+		} else if debugMode && estimatedTokens > actualTokens {
+			fmt.Printf("[TPM] 预估 %.0f, 实际 %.0f (预估偏高，不修正)\n",
+				estimatedTokens, actualTokens)
 		}
 	}
 

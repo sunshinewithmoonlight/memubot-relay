@@ -172,9 +172,14 @@ GOOS=windows GOARCH=amd64 go build -o memubot-gemini-relay-windows.exe memubot-g
 ```
 
 ### 工作机制
+
 1. **预估扣除**：请求发送前，根据 JSON Body 大小（字节/3）粗略估算 Token 数并扣除令牌。
 2. **平滑等待**：如果令牌不足，程序会计算需等待秒数并自动阻塞（Sleep），之后再发送请求。
-3. **精准修正**：收到 Gemini 响应后，根据 `usageMetadata.totalTokenCount` 进行修正（多退少补）。
+3. **安全修正**：仅在预估偏低时追加扣除令牌；若预估偏高，多余部分不再退还，作为安全缓冲。
+4. **429 智能节流**：
+   - 遭遇普通 429 错误：追加扣除预估 Token 并强制冷却 61 秒。
+   - 遭遇 `"Resource has been exhausted"` 错误：触发 30 分钟强力节流模式，每请求强制间隔 61 秒。
+5. **输出控制**：启用 TPM 时，每次请求前强制等待 1 秒，并限制 `maxOutputTokens` 为 4000。
 
 > [!TIP]
 > 推荐设置为模型 TPM 上限的 90% (如 1M 限制设为 `0.9M`)，以预留安全缓冲。
