@@ -1,4 +1,4 @@
-# memobot-gemini-relay (memU bot Special Edition)
+# memubot-gemini-relay (memU bot Special Edition)
 
 This is a high-efficiency, lightweight Go language relay server designed to enable **memU bot** to seamlessly use the **Google Gemini API**. It solves protocol incompatibility issues by translating standard OpenAI or Anthropic (Claude) request protocols into the Gemini native format.
 

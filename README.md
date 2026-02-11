@@ -1,4 +1,4 @@
-# memobot-gemini-relay (memU bot 专用版)
+# memubot-gemini-relay (memU bot 专用版)
 
 这是一个高效、轻量的 Go 语言中继服务器，旨在让 **memU bot** 能够无缝使用 **Google Gemini API**。它通过将标准的 OpenAI 或 Anthropic (Claude) 请求协议转译为 Gemini 原生格式，解决了协议不兼容的问题。
 
