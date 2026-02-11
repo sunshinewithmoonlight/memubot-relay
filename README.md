@@ -10,6 +10,7 @@
 - **🧠 Thinking Mode**: 支持 Gemini 2.0 的思考模式，自动处理 `thought_signature`。
 - **📦 上下文缓存**: 通过 `--cache` 参数启用。自动缓存 System Prompt 和 Tools 定义，减少网络传输和 API 成本。
 - **内置代理**: 支持 `--proxy` 参数，方便在中国大陆等网络环境下通过本地代理访问 Google 服务。
+- **TPM 速率限制**: 支持 `--tpm` 参数 (如 `0.9M`)，通过令牌桶算法平滑限制请求速率，防止触发 API 频率限制。
 - **极简运行**: 无需配置复杂的环境变量，启动即用。
 
 ## ⚙️ memU bot 配置指南
@@ -36,6 +37,12 @@ windows 直接运行 memubot-gemini-relay-windows.exe
 **使用代理运行**:
 ```bash
 ./memobot-gemini-relay --proxy http://127.0.0.1:7890
+```
+
+**启用 TPM 速率限制 (防止 429 错误)**:
+```bash
+./memobot-gemini-relay --tpm 0.9M  # 限制为 90万 tokens/分钟
+./memobot-gemini-relay --tpm 1000000 # 限制为 100万 tokens/分钟
 ```
 
 **启用上下文缓存 (减少传输量与 API 成本)**:
@@ -153,7 +160,24 @@ GOOS=windows GOARCH=amd64 go build -o memubot-gemini-relay-windows.exe memubot-g
 - 缓存创建耗时约 1-2 秒，但能显著减少后续请求延迟
 - 如果 System Prompt 或 Tools 发生变化，会自动创建新缓存
 
+## 🚦 TPM 速率限制
 
+针对 `gemini-3-flash-preview` 等模型存在的 TPM (Tokens Per Minute) 限制，本工具内置了**令牌桶算法**进行平滑处理。
+
+### 启用方式
+使用 `--tpm` 参数指定速率上限，支持 `K/M` 后缀或纯数字：
+```bash
+./memobot-gemini-relay --tpm 0.9M     # 900,000 tokens/min
+./memobot-gemini-relay --tpm 2000000  # 2,000,000 tokens/min
+```
+
+### 工作机制
+1. **预估扣除**：请求发送前，根据 JSON Body 大小（字节/3）粗略估算 Token 数并扣除令牌。
+2. **平滑等待**：如果令牌不足，程序会计算需等待秒数并自动阻塞（Sleep），之后再发送请求。
+3. **精准修正**：收到 Gemini 响应后，根据 `usageMetadata.totalTokenCount` 进行修正（多退少补）。
+
+> [!TIP]
+> 推荐设置为模型 TPM 上限的 90% (如 1M 限制设为 `0.9M`)，以预留安全缓冲。
 ## 🖥️ 运行效果
 启动后，你会看到如下提示：
 ```text
@@ -168,6 +192,7 @@ GOOS=windows GOARCH=amd64 go build -o memubot-gemini-relay-windows.exe memubot-g
 [ ] --debug 显示处理状态
 [ ] --cache 额外的缓存费用和减少的 token 费用
 [ ] --proxy 代理，如 --proxy http://127.0.0.1:7890
+[ ] --tpm 速率限制，如 --tpm 0.9M
 ---------------------------------------------------
 当前正在中继Gemini api
 ```

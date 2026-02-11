@@ -10,11 +10,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -26,6 +28,7 @@ var (
 	debugMode bool
 	cacheMode bool
 	proxyURL  string
+	tpmFlag   string                                             // 原始命令行输入，如 "0.9M" 或 "5000,000"
 	apiKey    string = "AIzaSyD81zQQoHvwSVurzOOaWJtGI5ZiARySgwc" // 默认 Key
 
 	// 签名缓存：tool_call_id -> thought_signature
@@ -206,6 +209,87 @@ func saveCacheEntry(key, name string, contents []GoogleContent) {
 	contextCacheMu.Unlock()
 }
 
+// --- TPM 速率限制 ---
+
+type TokenBucketLimiter struct {
+	maxCapacity     float64
+	tokensPerSecond float64
+	currentTokens   float64
+	lastUpdateTime  time.Time
+	mu              sync.Mutex
+}
+
+func NewTokenBucketLimiter(tpmLimit float64) *TokenBucketLimiter {
+	return &TokenBucketLimiter{
+		maxCapacity:     tpmLimit,
+		tokensPerSecond: tpmLimit / 60.0,
+		currentTokens:   tpmLimit, // 初始满桶
+		lastUpdateTime:  time.Now(),
+	}
+}
+
+// Consume 尝试消耗 token。返回 (是否允许, 需等待秒数)
+func (tb *TokenBucketLimiter) Consume(tokenCount float64) (bool, float64) {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+
+	if tokenCount > tb.maxCapacity {
+		return false, -1 // 超过总上限
+	}
+
+	// 回补令牌
+	now := time.Now()
+	elapsed := now.Sub(tb.lastUpdateTime).Seconds()
+	tb.currentTokens = math.Min(tb.maxCapacity, tb.currentTokens+elapsed*tb.tokensPerSecond)
+	tb.lastUpdateTime = now
+
+	if tb.currentTokens >= tokenCount {
+		tb.currentTokens -= tokenCount
+		return true, 0
+	}
+
+	needed := tokenCount - tb.currentTokens
+	waitTime := needed / tb.tokensPerSecond
+	return false, waitTime
+}
+
+// Refund 退还多扣的令牌（事后修正）
+func (tb *TokenBucketLimiter) Refund(amount float64) {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	tb.currentTokens = math.Min(tb.maxCapacity, tb.currentTokens+amount)
+}
+
+// ConsumeExtra 追加扣减（实际用量 > 预估时）
+func (tb *TokenBucketLimiter) ConsumeExtra(amount float64) {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	tb.currentTokens -= amount
+	// 允许变负，下次请求会等待
+}
+
+var tpmLimiter *TokenBucketLimiter // nil 表示不限流
+
+func parseTPM(s string) (float64, error) {
+	s = strings.TrimSpace(s)
+	s = strings.ReplaceAll(s, ",", "") // 忽略英文逗号
+
+	if strings.HasSuffix(strings.ToUpper(s), "M") {
+		numStr := s[:len(s)-1]
+		val, err := strconv.ParseFloat(numStr, 64)
+		if err != nil {
+			return 0, fmt.Errorf("无法解析 TPM 值: %s", s)
+		}
+		return val * 1_000_000, nil
+	}
+
+	val, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, fmt.Errorf("无法解析 TPM 值: %s", s)
+	}
+	return val, nil
+}
+
 // --- 结构体定义 (通用/OpenAI/Anthropic 输入) ---
 
 type ContentBlock struct {
@@ -309,6 +393,9 @@ type GoogleResponse struct {
 		FinishReason  string `json:"finishReason"`
 		FinishMessage string `json:"finishMessage"`
 	} `json:"candidates"`
+	UsageMetadata struct {
+		TotalTokenCount int `json:"totalTokenCount"`
+	} `json:"usageMetadata"`
 }
 
 // --- 辅助函数 ---
@@ -429,7 +516,17 @@ func main() {
 	flag.BoolVar(&debugMode, "debug", false, "是否开启调试模式")
 	flag.BoolVar(&cacheMode, "cache", false, "是否开启 Gemini 上下文缓存")
 	flag.StringVar(&proxyURL, "proxy", "", "代理服务器地址 (如 http://127.0.0.1:7890)")
+	flag.StringVar(&tpmFlag, "tpm", "", "TPM 速率限制 (如 0.9M 或 900,000)")
 	flag.Parse()
+
+	// 解析 TPM
+	if tpmFlag != "" {
+		tpmValue, err := parseTPM(tpmFlag)
+		if err != nil {
+			log.Fatalf("TPM 参数错误: %v", err)
+		}
+		tpmLimiter = NewTokenBucketLimiter(tpmValue)
+	}
 
 	fmt.Println("        用于 memU bot 的 Gemini API 中继工具")
 	fmt.Println("               memU bot 中配置如下：")
@@ -456,6 +553,13 @@ func main() {
 		fmt.Println("[ ] --proxy 代理，如 --proxy http://127.0.0.1:7890")
 	} else {
 		fmt.Printf("[✓] --proxy %s 代理\n", proxyURL)
+	}
+
+	if tpmFlag != "" {
+		tpmValue, _ := parseTPM(tpmFlag)
+		fmt.Printf("[✓] --tpm %s (限制 %.0f tokens/min)\n", tpmFlag, tpmValue)
+	} else {
+		fmt.Println("[ ] --tpm 速率限制，如 --tpm 0.9M")
 	}
 
 	fmt.Println("---------------------------------------------------")
@@ -874,6 +978,32 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// === 1.7 TPM 速率限制 ===
+	var estimatedTokens float64
+	if tpmLimiter != nil {
+		// 粗估：JSON payload 字节数 / 4 (英文) 或 / 2 (中文混合)
+		// 使用 / 3 作为折中
+		payloadSize := len(bodyBytes) // 原始请求大小
+		estimatedTokens = float64(payloadSize) / 3.0
+
+		for {
+			allowed, waitTime := tpmLimiter.Consume(estimatedTokens)
+			if allowed {
+				if debugMode {
+					fmt.Printf("[TPM] ✅ 允许请求，预估 %.0f tokens\n", estimatedTokens)
+				}
+				break
+			}
+			if waitTime < 0 {
+				fmt.Printf("[TPM] ❌ 单次请求 %.0f tokens 超过 TPM 上限\n", estimatedTokens)
+				http.Error(w, "Request too large for TPM limit", 429)
+				return
+			}
+			fmt.Printf("[TPM] ⏳ 令牌不足，等待 %.1f 秒...\n", waitTime)
+			time.Sleep(time.Duration(waitTime*1000) * time.Millisecond)
+		}
+	}
+
 	// === 2. 发送请求 ===
 	// client 已在缓存处理阶段创建
 
@@ -915,6 +1045,27 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("[ERR] 解析 Google 响应失败: %v\n", err)
 		http.Error(w, "Failed to parse Google response", 500)
 		return
+	}
+
+	// === TPM 事后修正 ===
+	if tpmLimiter != nil && gResp.UsageMetadata.TotalTokenCount > 0 {
+		actualTokens := float64(gResp.UsageMetadata.TotalTokenCount)
+		diff := estimatedTokens - actualTokens
+		if diff > 0 {
+			// 预估偏高，退还多扣的
+			tpmLimiter.Refund(diff)
+			if debugMode {
+				fmt.Printf("[TPM] 修正: 预估 %.0f, 实际 %.0f, 退还 %.0f\n",
+					estimatedTokens, actualTokens, diff)
+			}
+		} else if diff < 0 {
+			// 预估偏低，追加扣减
+			tpmLimiter.ConsumeExtra(-diff)
+			if debugMode {
+				fmt.Printf("[TPM] 修正: 预估 %.0f, 实际 %.0f, 追加扣 %.0f\n",
+					estimatedTokens, actualTokens, -diff)
+			}
+		}
 	}
 
 	if len(gResp.Candidates) > 0 {

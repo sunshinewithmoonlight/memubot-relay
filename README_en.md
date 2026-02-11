@@ -10,6 +10,7 @@ This is a high-efficiency, lightweight Go language relay server designed to enab
 - **🧠 Thinking Mode**: Supports Gemini 2.0's thinking mode, automatically handling `thought_signature`.
 - **📦 Context Caching**: Enable via `--cache` parameter. Automatically caches System Prompt and Tools definitions, reducing network transfer and API costs.
 - **Built-in Proxy**: Supports the `--proxy` parameter, facilitating access to Google services through a local proxy in network environments like mainland China.
+- **TPM Rate Limiting**: Supports `--tpm` parameter (e.g., `0.9M`), using a token bucket algorithm to smooth request rates and prevent API rate limits.
 - **Minimalist Operation**: No complex environment variable configuration required, ready to use upon startup.
 
 ## ⚙️ memU bot Configuration Guide
@@ -36,6 +37,12 @@ For Windows, directly run `memubot-gemini-relay-windows.exe`.
 **Run with Proxy**:
 ```bash
 ./memobot-gemini-relay --proxy http://127.0.0.1:7890
+```
+
+**Enable TPM Rate Limiting (Prevent 429 Errors)**:
+```bash
+./memobot-gemini-relay --tpm 0.9M  # Limit to 900k tokens/minute
+./memobot-gemini-relay --tpm 1000000 # Limit to 1M tokens/minute
 ```
 
 **Enable Context Caching (reduce transfer and API costs)**:
@@ -153,7 +160,24 @@ This relay implements [Gemini Explicit Context Caching](https://ai.google.dev/ge
 - Cache creation takes about 1-2 seconds but significantly reduces subsequent request latency
 - If System Prompt or Tools change, a new cache is automatically created
 
+## 🚦 TPM Rate Limiting
 
+To address TPM (Tokens Per Minute) limits on models like `gemini-3-flash-preview`, this tool includes a built-in **token bucket algorithm** for smooth rate limiting.
+
+### How to Enable
+Use the `--tpm` parameter to specify the rate limit, supporting `K/M` suffixes or raw numbers:
+```bash
+./memobot-gemini-relay --tpm 0.9M     # 900,000 tokens/min
+./memobot-gemini-relay --tpm 2000000  # 2,000,000 tokens/min
+```
+
+### Mechanism
+1. **Estimated Deduction**: Before sending a request, tokens are roughly estimated and deducted based on the JSON Body size (bytes/3).
+2. **Smooth Waiting**: If tokens are insufficient, the program calculates the wait time and automatically blocks (Sleeps) before sending the request.
+3. **Accurate Correction**: After receiving the Gemini response, correction (refund or extra deduction) is performed based on `usageMetadata.totalTokenCount`.
+
+> [!TIP]
+> It is recommended to set this to 90% of the model's TPM limit (e.g., set `0.9M` for a 1M limit) to provide a safety buffer.
 ## 🖥️ Running Effect
 After startup, you will see the following prompt:
 ```text
@@ -168,6 +192,7 @@ After startup, you will see the following prompt:
 [ ] --debug 显示处理状态
 [ ] --cache 额外的缓存费用和减少的 token 费用
 [ ] --proxy 代理，如 --proxy http://127.0.0.1:7890
+[ ] --tpm 速率限制，如 --tpm 0.9M
 ---------------------------------------------------
 当前正在中继Gemini api
 ```
