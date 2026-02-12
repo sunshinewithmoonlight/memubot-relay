@@ -35,6 +35,8 @@ go.work.sum
 
 memubot-gemini-relay
 memubot-gemini-relay-windows.exe
+memubot-openai-relay
+memubot-openai-relay-windows.exe
 
 # Logs
 *.log
