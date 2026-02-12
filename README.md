@@ -4,7 +4,7 @@
 
 ## ✨ 特性
 
-- **memU bot 深度适配**: 自动处理 memU bot 发出的 `/v1/messages` (Anthropic) 或 `/v1/chat/completions` (OpenAI) 请求。
+- **memU bot 深度适配**: 自动处理 memU bot 发出的 `/v1/messages` (Anthropic)请求。
 - **协议转换**: 将各种 API 格式的消息流完整映射至 Gemini `generateContent` 接口。
 - **🔧 Function Call 支持**: 完整支持 Anthropic/MiniMax 风格的工具调用（`tool_use`/`tool_result`）。
 - **🧠 Thinking Mode**: 支持 Gemini 2.0 的思考模式，自动处理 `thought_signature`。

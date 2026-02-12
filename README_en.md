@@ -4,7 +4,7 @@ This is a high-efficiency, lightweight Go language relay server designed to enab
 
 ## ✨ Features
 
-- **memU bot Deep Adaptation**: Automatically handles `/v1/messages` (Anthropic) or `/v1/chat/completions` (OpenAI) requests sent by memU bot.
+- **memU bot Deep Adaptation**: Automatically handles `/v1/messages` (Anthropic) requests sent by memU bot.
 - **Protocol Conversion**: Maps message streams in various API formats completely to the Gemini `generateContent` interface.
 - **🔧 Function Call Support**: Fully supports Anthropic/MiniMax style tool calls (`tool_use`/`tool_result`).
 - **🧠 Thinking Mode**: Supports Gemini 2.0's thinking mode, automatically handling `thought_signature`.
