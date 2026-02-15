@@ -1,3 +1,5 @@
+//go:build gemini
+
 package main
 
 import (
