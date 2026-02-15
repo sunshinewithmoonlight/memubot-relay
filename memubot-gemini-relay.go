@@ -889,10 +889,25 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if len(parts) > 0 {
-			gReq.Contents = append(gReq.Contents, GoogleContent{
-				Role:  role,
-				Parts: parts,
-			})
+			// 如果上一条消息的角色与当前相同，则合并 parts（Gemini 不允许连续的相同角色对话）
+			if len(gReq.Contents) > 0 && gReq.Contents[len(gReq.Contents)-1].Role == role {
+				gReq.Contents[len(gReq.Contents)-1].Parts = append(gReq.Contents[len(gReq.Contents)-1].Parts, parts...)
+			} else {
+				gReq.Contents = append(gReq.Contents, GoogleContent{
+					Role:  role,
+					Parts: parts,
+				})
+			}
+		}
+	}
+	// === 1.4.1 确保对话不以 model 开头（Gemini 要求 functionCall 之前必须有 user/functionResponse）===
+	if len(gReq.Contents) > 0 && gReq.Contents[0].Role == "model" {
+		gReq.Contents = append([]GoogleContent{{
+			Role:  "user",
+			Parts: []GooglePart{{Text: "continue"}},
+		}}, gReq.Contents...)
+		if debugMode {
+			fmt.Println("[DEBUG] 对话以 model 开头，已插入占位 user 消息")
 		}
 	}
 

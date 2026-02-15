@@ -10,7 +10,7 @@
 
 **通用特性：**
 - **memU bot 深度适配**: 自动处理 memU bot 发出的 `/v1/messages` (Anthropic)请求。
-- **协议转换**: 将各种 API 格式的消息流完整映射至目标 API 原生格式。
+- **协议转换**: 将各种 API 格式的消息流完整映射至目标 API 原生格式，自动合并连续同角色消息。
 - **🔧 Function Call 支持**: 完整支持 Anthropic/MiniMax 风格的工具调用（`tool_use`/`tool_result`）。
 - **内置代理**: 支持 `--proxy` 参数，方便在中国大陆等网络环境下通过本地代理访问。
 - **TPM 速率限制**: 支持 `--tpm` 参数 (如 `0.9M`)，通过令牌桶算法平滑限制请求速率，防止触发 API 频率限制。
@@ -18,6 +18,7 @@
 
 **Gemini Relay 专属：**
 - **🧠 Thinking Mode**: 支持 Gemini 2.0 的思考模式，自动处理 `thought_signature`。
+- **🔄 对话轮次修正**: 自动修正不符合 Gemini API 要求的对话顺序（如对话以 `model` 开头、连续相同角色等）。
 - **📦 上下文缓存**: 通过 `--cache` 参数启用。自动缓存 System Prompt 和 Tools 定义，减少网络传输和 API 成本。
 
 **OpenAI Relay 专属：**
@@ -118,8 +119,8 @@ go mod init memubot-openai-relay && go build -tags gemini -o memubot-gemini-rela
 go mod init memubot-openai-relay && go build -tags openai -o memubot-openai-relay . && rm go.mod
 
 # Cross-compile for Windows
-GOOS=windows GOARCH=amd64 go build -tags gemini -o memubot-gemini-relay-windows.exe .
-GOOS=windows GOARCH=amd64 go build -tags openai -o memubot-openai-relay-windows.exe .
+go mod init memubot-openai-relay && GOOS=windows GOARCH=amd64 go build -tags gemini -o memubot-gemini-relay-windows.exe . && rm go.mod
+go mod init memubot-openai-relay && GOOS=windows GOARCH=amd64 go build -tags openai -o memubot-openai-relay-windows.exe . && rm go.mod
 ```
 
 ## 🔧 Function Call 支持

@@ -627,6 +627,34 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// === 1.4.1 合并连续相同角色的消息（部分 OpenAI 兼容 API 不允许连续相同角色）===
+	if len(oaiReq.Messages) > 1 {
+		merged := []OpenAIMessage{oaiReq.Messages[0]}
+		for i := 1; i < len(oaiReq.Messages); i++ {
+			prev := &merged[len(merged)-1]
+			cur := oaiReq.Messages[i]
+			// 仅合并纯文本消息（无 tool_calls、无 tool_call_id）
+			if cur.Role == prev.Role &&
+				len(cur.ToolCalls) == 0 && cur.ToolCallID == "" &&
+				len(prev.ToolCalls) == 0 && prev.ToolCallID == "" {
+				// 拼接文本内容
+				prevStr, _ := prev.Content.(string)
+				curStr, _ := cur.Content.(string)
+				if prevStr != "" && curStr != "" {
+					prev.Content = prevStr + "\n" + curStr
+				} else if curStr != "" {
+					prev.Content = curStr
+				}
+			} else {
+				merged = append(merged, cur)
+			}
+		}
+		if debugMode && len(merged) < len(oaiReq.Messages) {
+			fmt.Printf("[DEBUG] 合并了 %d 条连续相同角色消息\n", len(oaiReq.Messages)-len(merged))
+		}
+		oaiReq.Messages = merged
+	}
+
 	// === 1.5 HTTP Client ===
 	transport := &http.Transport{}
 	if proxyURL != "" {

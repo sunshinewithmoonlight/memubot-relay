@@ -10,7 +10,7 @@ This project includes two relay modes:
 
 **Common Features:**
 - **memU bot Deep Adaptation**: Automatically handles `/v1/messages` (Anthropic) requests sent by memU bot.
-- **Protocol Conversion**: Maps message streams in various API formats completely to the target API native format.
+- **Protocol Conversion**: Maps message streams in various API formats completely to the target API native format, automatically merging consecutive same-role messages.
 - **🔧 Function Call Support**: Fully supports Anthropic/MiniMax style tool calls (`tool_use`/`tool_result`).
 - **Built-in Proxy**: Supports the `--proxy` parameter, facilitating access through a local proxy in network environments like mainland China.
 - **TPM Rate Limiting**: Supports `--tpm` parameter (e.g., `0.9M`), using a token bucket algorithm to smooth request rates and prevent API rate limits.
@@ -18,6 +18,7 @@ This project includes two relay modes:
 
 **Gemini Relay Exclusive:**
 - **🧠 Thinking Mode**: Supports Gemini 2.0's thinking mode, automatically handling `thought_signature`.
+- **🔄 Turn Order Correction**: Automatically fixes conversation turn order issues that violate Gemini API requirements (e.g., conversations starting with `model` turn, consecutive same-role turns).
 - **📦 Context Caching**: Enable via `--cache` parameter. Automatically caches System Prompt and Tools definitions, reducing network transfer and API costs.
 
 **OpenAI Relay Exclusive:**
@@ -118,8 +119,8 @@ go mod init memubot-openai-relay && go build -tags gemini -o memubot-gemini-rela
 go mod init memubot-openai-relay && go build -tags openai -o memubot-openai-relay . && rm go.mod
 
 # Cross-compile for Windows
-GOOS=windows GOARCH=amd64 go build -tags gemini -o memubot-gemini-relay-windows.exe .
-GOOS=windows GOARCH=amd64 go build -tags openai -o memubot-openai-relay-windows.exe .
+go mod init memubot-openai-relay && GOOS=windows GOARCH=amd64 go build -tags gemini -o memubot-gemini-relay-windows.exe . && rm go.mod
+go mod init memubot-openai-relay && GOOS=windows GOARCH=amd64 go build -tags openai -o memubot-openai-relay-windows.exe . && rm go.mod
 ```
 
 ## 🔧 Function Call Support
