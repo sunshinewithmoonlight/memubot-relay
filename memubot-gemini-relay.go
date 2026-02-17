@@ -842,6 +842,8 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 							}
 							if signature != "" {
 								part.ThoughtSignature = signature
+							} else {
+								part.ThoughtSignature = "skip_thought_signature_validator"
 							}
 							parts = append(parts, part)
 						}
@@ -865,6 +867,7 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 						Name: tc.Function.Name,
 						Args: args,
 					},
+					ThoughtSignature: "skip_thought_signature_validator",
 				})
 			}
 
