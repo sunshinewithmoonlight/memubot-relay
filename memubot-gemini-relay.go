@@ -406,7 +406,9 @@ type GoogleResponse struct {
 		FinishMessage string `json:"finishMessage"`
 	} `json:"candidates"`
 	UsageMetadata struct {
-		TotalTokenCount int `json:"totalTokenCount"`
+		PromptTokenCount     int `json:"promptTokenCount"`
+		CandidatesTokenCount int `json:"candidatesTokenCount"`
+		TotalTokenCount      int `json:"totalTokenCount"`
 	} `json:"usageMetadata"`
 }
 
@@ -1237,8 +1239,8 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 			"content":     contentArr,
 			"stop_reason": stopReason,
 			"usage": map[string]interface{}{
-				"input_tokens":  0,
-				"output_tokens": 0,
+				"input_tokens":  gResp.UsageMetadata.PromptTokenCount,
+				"output_tokens": gResp.UsageMetadata.CandidatesTokenCount,
 			},
 			"base_resp": map[string]interface{}{
 				"status_code": 0,
